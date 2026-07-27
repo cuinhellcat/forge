@@ -105,6 +105,20 @@ public final class FServerManager implements IHasForgeLog {
         return clients.get(ch);
     }
 
+    /**
+     * Make every connected client take a full game state on its next update instead of a
+     * delta. Needed after the host rewinds the game, since a delta cannot describe a jump
+     * backwards in time.
+     */
+    public void resyncAllClients() {
+        for (final RemoteClient client : clients.values()) {
+            final RemoteClientGuiGame gui = client.getGui();
+            if (gui != null) {
+                gui.setResyncPending();
+            }
+        }
+    }
+
     /** O(n) scan — pod size is capped at 8, so the map keyed by Channel stays the source of truth. */
     public RemoteClient getClientBySlotIndex(int slotIndex) {
         for (RemoteClient client : clients.values()) {

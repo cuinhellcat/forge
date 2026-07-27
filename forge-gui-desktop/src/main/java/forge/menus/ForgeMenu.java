@@ -78,6 +78,8 @@ public final class ForgeMenu {
         add(new AudioMenu().getMenu());
         add(HelpMenu.getMenu());
         addSeparator();
+        add(LoadSavedGame.getMenuItem());
+        addSeparator();
         add(OnlineMenu.getMenu());
         addSeparator();
         add(getMenuItem_Restart());

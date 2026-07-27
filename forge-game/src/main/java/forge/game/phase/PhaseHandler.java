@@ -1062,6 +1062,25 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
 
                 chosenSa = pPlayerPriority.getController().chooseSpellAbilityToPlay();
 
+                // The player asked to rewind instead of acting. Do it here, where the state
+                // is between actions, and let the main game loop restart from the restored
+                // position on its next step.
+                final int rewindSteps = pPlayerPriority.getController().consumeRewindRequest();
+                if (rewindSteps > 0 && game.rewindToActionOf(pPlayerPriority, rewindSteps)) {
+                    pPlayerPriority.getController().afterRewind();
+                    return;
+                }
+
+                // A saved game the player asked to load. Same reasoning as the rewind: the
+                // state is between actions here, so it is safe to replace it wholesale.
+                final GameState pendingState = pPlayerPriority.getController().consumePendingGameState();
+                if (pendingState != null) {
+                    pendingState.applyToGame(game);
+                    game.clearRewindPoints();
+                    pPlayerPriority.getController().afterRewind();
+                    return;
+                }
+
                 // this needs to come after chosenSa so it sees you conceding on own turn
                 if (playerTurn.hasLost() && pPlayerPriority.equals(playerTurn) && pFirstPriority.equals(playerTurn)) {
                     // If the active player has lost, and they have priority, set the next player to have priority
@@ -1211,6 +1230,74 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
 
     // this is a hack for the setup game state mode, do not use outside of devSetupGameState code
     // as it avoids calling any of the phase effects that may be necessary in a less enforced context
+    /**
+     * The parts of the turn structure that GameSnapshot does not carry: who holds priority,
+     * who held it first this round, and the per-turn counters. Without these a restored
+     * snapshot would resume the main loop at the wrong player.
+     */
+    public static final class PriorityState implements java.io.Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final Player pPlayerPriority, pFirstPriority, playerPreviousTurn;
+        private final boolean givePriorityToPlayer, skipDamageSteps, bRepeatCleanup;
+        private final int nUpkeepsThisTurn, nUpkeepsThisGame, nCombatsThisTurn, nMainsThisTurn,
+                nEndOfTurnsThisTurn, planarDiceSpecialActionThisTurn;
+        private final List<ExtraTurn> extraTurns;
+        private final Map<PhaseType, List<ExtraPhase>> extraPhases;
+
+        private PriorityState(PhaseHandler ph) {
+            pPlayerPriority = ph.pPlayerPriority;
+            pFirstPriority = ph.pFirstPriority;
+            playerPreviousTurn = ph.playerPreviousTurn;
+            givePriorityToPlayer = ph.givePriorityToPlayer;
+            skipDamageSteps = ph.skipDamageSteps;
+            bRepeatCleanup = ph.bRepeatCleanup;
+            nUpkeepsThisTurn = ph.nUpkeepsThisTurn;
+            nUpkeepsThisGame = ph.nUpkeepsThisGame;
+            nCombatsThisTurn = ph.nCombatsThisTurn;
+            nMainsThisTurn = ph.nMainsThisTurn;
+            nEndOfTurnsThisTurn = ph.nEndOfTurnsThisTurn;
+            planarDiceSpecialActionThisTurn = ph.planarDiceSpecialActionThisTurn;
+            extraTurns = Lists.newArrayList(ph.extraTurns);
+            extraPhases = Maps.newEnumMap(PhaseType.class);
+            for (Map.Entry<PhaseType, Stack<ExtraPhase>> e : ph.extraPhases.entrySet()) {
+                extraPhases.put(e.getKey(), Lists.newArrayList(e.getValue()));
+            }
+        }
+    }
+
+    public PriorityState capturePriorityState() {
+        return new PriorityState(this);
+    }
+
+    public void restorePriorityState(final PriorityState s) {
+        pPlayerPriority = s.pPlayerPriority;
+        pFirstPriority = s.pFirstPriority;
+        playerPreviousTurn = s.playerPreviousTurn;
+        givePriorityToPlayer = s.givePriorityToPlayer;
+        skipDamageSteps = s.skipDamageSteps;
+        bRepeatCleanup = s.bRepeatCleanup;
+        nUpkeepsThisTurn = s.nUpkeepsThisTurn;
+        nUpkeepsThisGame = s.nUpkeepsThisGame;
+        nCombatsThisTurn = s.nCombatsThisTurn;
+        nMainsThisTurn = s.nMainsThisTurn;
+        nEndOfTurnsThisTurn = s.nEndOfTurnsThisTurn;
+        planarDiceSpecialActionThisTurn = s.planarDiceSpecialActionThisTurn;
+
+        extraTurns.clear();
+        extraTurns.addAll(s.extraTurns);
+        extraPhases.clear();
+        for (Map.Entry<PhaseType, List<ExtraPhase>> e : s.extraPhases.entrySet()) {
+            final Stack<ExtraPhase> stack = new Stack<>();
+            stack.addAll(e.getValue());
+            extraPhases.put(e.getKey(), stack);
+        }
+
+        for (final Player p : game.getPlayers()) {
+            p.setHasPriority(pPlayerPriority == p);
+        }
+    }
+
     public final void devModeSet(final PhaseType phase0, final Player player0, boolean endCombat, int cturn) {
         if (phase0 != null) {
             setPhase(phase0);

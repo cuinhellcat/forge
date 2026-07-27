@@ -211,6 +211,7 @@ public enum CSubmenuPreferences implements ICDoc {
         initializeAiProfilesComboBox();
         initializeAiSideboardingModeComboBox();
         initializeAiTimeoutComboBox();
+        initializeRewindStepsComboBox();
         initializeSoundSetsComboBox();
         initializeMusicSetsComboBox();
         initializeStackAdditionsComboBox();
@@ -492,6 +493,14 @@ public enum CSubmenuPreferences implements ICDoc {
         final FPref userSetting = FPref.MATCH_AI_TIMEOUT;
         final FComboBoxPanel<String> panel = this.view.getAiTimeoutComboBox();
         final FComboBox<String> comboBox = createComboBox(new String[] {"5", "10", "60", "120", "240", "300", "600"}, userSetting);
+        final String selectedItem = this.prefs.getPref(userSetting);
+        panel.setComboBox(comboBox, selectedItem);
+    }
+
+    private void initializeRewindStepsComboBox() {
+        final FPref userSetting = FPref.MATCH_REWIND_STEPS;
+        final FComboBoxPanel<String> panel = this.view.getRewindStepsComboBox();
+        final FComboBox<String> comboBox = createComboBox(new String[] {"0", "1", "2", "3", "5", "10"}, userSetting);
         final String selectedItem = this.prefs.getPref(userSetting);
         panel.setComboBox(comboBox, selectedItem);
     }

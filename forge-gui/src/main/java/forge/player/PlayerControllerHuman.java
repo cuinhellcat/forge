@@ -6,6 +6,7 @@ import forge.StaticData;
 import forge.ai.AvailableActions;
 import forge.game.GameState;
 import forge.ai.PlayerControllerAi;
+import forge.gamemodes.net.server.FServerManager;
 import forge.gamemodes.net.server.RemoteClientGuiGame;
 import forge.card.*;
 import forge.card.mana.ManaCost;
@@ -94,6 +95,7 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.io.*;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.function.Function;
@@ -1724,6 +1726,9 @@ public class PlayerControllerHuman extends PlayerController implements IGameCont
         }
 
         netLog.trace("Creating InputPassPriority for player {}", player.getName());
+        // The player is being asked, which is what the rewind held out for — from the next
+        // priority on, auto-pass behaves as configured again.
+        suppressAutoPassAfterRewind = false;
         final InputPassPriority defaultInput = new InputPassPriority(this);
         defaultInput.showAndWait();
         netLog.trace("InputPassPriority returned for player {}, chosenSa={}", player.getName(), defaultInput.getChosenSa());
@@ -2695,6 +2700,125 @@ public class PlayerControllerHuman extends PlayerController implements IGameCont
 
     public void updateAchievements() {
         AchievementCollection.updateAll(this);
+    }
+
+    /** Set from the GUI thread, read by the game thread in PhaseHandler#mainLoopStep. */
+    private volatile int rewindStepsRequested = 0;
+
+    /** Holds off a single auto-pass so a rewind is not skipped past immediately. */
+    private volatile boolean suppressAutoPassAfterRewind = false;
+
+    /** How many of this player's own actions can currently be rewound (0 = none). */
+    public int getAvailableRewindSteps() {
+        return getGame().getAvailableRewindSteps(player);
+    }
+
+    /** Where each available rewind step leads, newest first, for labelling the menu. */
+    public List<String> describeRewindPoints() {
+        return getGame().describeRewindPoints(player);
+    }
+
+    /**
+     * Ask the game loop to undo this player's last action, along with everything that
+     * happened after it. Called from the GUI thread; the rewind itself happens on the
+     * game thread, which is why this only ends the current input and sets a flag.
+     */
+    public void requestRewind(final int steps) {
+        if (getAvailableRewindSteps() < steps) {
+            getGui().message(localizer.getMessage("lblNothingToRewind"), localizer.getMessage("lblRewind"));
+            return;
+        }
+        if (!(inputProxy.getInput() instanceof InputPassPriority)) {
+            // Mid-cast or mid-payment the game thread is deep inside an action; cancel that
+            // first, then rewind.
+            getGui().message(localizer.getMessage("lblRewindNeedsPriority"), localizer.getMessage("lblRewind"));
+            return;
+        }
+        rewindStepsRequested = steps;
+        passPriority(); // ends the input so the game loop reaches the rewind check
+    }
+
+    /**
+     * Writes the current position to a file the player picks. Reading the game is only safe
+     * while it is waiting for input, which is exactly when this is reachable from the menu.
+     */
+    public void saveGameToFile() {
+        if (!(inputProxy.getInput() instanceof InputPassPriority)) {
+            getGui().message(localizer.getMessage("lblSaveNeedsPriority"), localizer.getMessage("lblSaveGame"));
+            return;
+        }
+        final File dir = new File(ForgeConstants.USER_GAMES_DIR);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        final String stamp = new SimpleDateFormat("yyyy-MM-dd_HH-mm").format(new Date());
+        final File file = GuiBase.getInterface().getSaveFile(new File(dir, "game_" + stamp + ".txt"));
+        if (file == null) {
+            return;
+        }
+        try {
+            final GameState state = new GameState();
+            state.initFromGame(getGame());
+            try (BufferedWriter bw = new BufferedWriter(new FileWriter(file))) {
+                bw.write(state.toString());
+            }
+            getGui().message(localizer.getMessage("lblGameSavedTo") + "\n" + file.getPath(),
+                    localizer.getMessage("lblSaveGame"));
+        } catch (final Exception e) {
+            getGui().showErrorDialog(e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Reads a saved position and hands it to the game loop, which swaps it in between
+     * actions — see PlayerController#consumePendingGameState.
+     */
+    public void loadGameFromFile() {
+        if (!(inputProxy.getInput() instanceof InputPassPriority)) {
+            getGui().message(localizer.getMessage("lblLoadNeedsPriority"), localizer.getMessage("lblLoadGame"));
+            return;
+        }
+        final File dir = new File(ForgeConstants.USER_GAMES_DIR);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        final String filename = GuiBase.getInterface().showFileDialog(localizer.getMessage("lblLoadGame"),
+                ForgeConstants.USER_GAMES_DIR);
+        if (filename == null) {
+            return;
+        }
+        final GameState state = new GameState();
+        try (FileInputStream in = new FileInputStream(filename)) {
+            state.parse(in);
+        } catch (final Exception e) {
+            getGui().showErrorDialog(localizer.getMessage("lblErrorLoadingBattleSetupFile") + "\n" + filename);
+            return;
+        }
+        setPendingGameState(state);
+        passPriority(); // ends the input so the game loop reaches the load
+    }
+
+    @Override
+    public int consumeRewindRequest() {
+        final int steps = rewindStepsRequested;
+        rewindStepsRequested = 0;
+        return steps;
+    }
+
+    @Override
+    public void afterRewind() {
+        // A rewind is a deliberate stop, so nothing may race the game forward again before
+        // the player has acted in the position they went back to. "Pass until end of turn"
+        // is switched off outright — it was a decision about a turn that no longer stands —
+        // and the auto-pass at the restored priority is skipped once.
+        yieldController.setAutoPassUntilEndOfTurn(false);
+        suppressAutoPassAfterRewind = true;
+        getGui().updateAutoPassPrompt();
+
+        // Deltas can't express a jump backwards, so push the full state to every client.
+        if (FServerManager.getInstance().isHosting()) {
+            FServerManager.getInstance().resyncAllClients();
+        }
     }
 
     public boolean canUndoLastAction() {
@@ -3816,6 +3940,9 @@ public class PlayerControllerHuman extends PlayerController implements IGameCont
     }
 
     public boolean mayAutoPass() {
+        if (suppressAutoPassAfterRewind) {
+            return false;
+        }
         return yieldController.shouldAutoYield()
                 || yieldController.isAutoPassingNoActions(getLocalPlayerView());
     }

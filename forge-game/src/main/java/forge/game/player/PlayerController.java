@@ -86,6 +86,36 @@ public abstract class PlayerController {
         return false;
     }
 
+    /**
+     * Number of own actions this controller wants rewound, consumed by the main game loop
+     * the next time this player holds priority. Only the local human controller ever
+     * returns more than 0 — see Game#rewindToActionOf.
+     */
+    public int consumeRewindRequest() {
+        return 0;
+    }
+
+    /** Called on the game thread right after a rewind this controller asked for. */
+    public void afterRewind() {
+    }
+
+    /**
+     * A saved game state waiting to be loaded, taken by the main game loop the next time
+     * this player holds priority. Applying one mid-action would pull the ground out from
+     * under whatever the game thread is doing, so it happens between actions like a rewind.
+     */
+    private GameState pendingGameState = null;
+
+    public void setPendingGameState(GameState state) {
+        pendingGameState = state;
+    }
+
+    public GameState consumePendingGameState() {
+        GameState state = pendingGameState;
+        pendingGameState = null;
+        return state;
+    }
+
     public Game getGame() { return gameView.getGame(); }
     public Match getMatch() { return gameView.getMatch(); }
     public Player getPlayer() { return player; }

@@ -199,6 +199,7 @@ public class ForgePreferences extends PreferencesStore<ForgePreferences.FPref> {
         MATCH_AI_TIMEOUT("5"),
         UI_ENABLE_AI_CHEATS ("false"),
         MATCH_EXPERIMENTAL_RESTORE("false"),
+        MATCH_REWIND_STEPS("3"),
 
         ENFORCE_DECK_LEGALITY ("true"),
         PERFORMANCE_MODE ("false"),

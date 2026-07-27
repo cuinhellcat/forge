@@ -1,6 +1,7 @@
 package forge.screens.match.menus;
 
 import java.awt.event.KeyEvent;
+import java.util.List;
 
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
@@ -15,6 +16,7 @@ import forge.gamemodes.match.YieldUpdate;
 import forge.localinstance.properties.ForgePreferences;
 import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
+import forge.player.PlayerControllerHuman;
 import forge.screens.match.CMatchUI;
 import forge.screens.match.VAutoYieldsAndTriggers;
 import forge.screens.match.VYieldSettings;
@@ -37,6 +39,18 @@ public final class GameMenu {
         final JMenu menu = new JMenu(localizer.getMessage("lblGame"));
         menu.setMnemonic(KeyEvent.VK_G);
         menu.add(getMenuItem_Undo());
+        final JMenu rewindMenu = getMenu_Rewind();
+        if (rewindMenu != null) {
+            menu.add(rewindMenu);
+        }
+        final SkinnedMenuItem saveItem = getMenuItem_SaveGame();
+        final SkinnedMenuItem loadItem = getMenuItem_LoadGame();
+        if (saveItem != null) {
+            menu.addSeparator();
+            menu.add(saveItem);
+            menu.add(loadItem);
+            menu.addSeparator();
+        }
         menu.add(getMenuItem_Concede());
         menu.add(getMenuItem_OfferDraw());
         menu.add(getMenuItem_EndTurn());
@@ -52,6 +66,29 @@ public final class GameMenu {
         menu.addMenuListener(new MenuListener() {
             @Override public void menuSelected(final MenuEvent e) {
                 autoPassItem.setState(prefs.getPrefBoolean(FPref.YIELD_AUTO_PASS_NO_ACTIONS));
+                if (rewindMenu != null) {
+                    // Label every step with where it actually leads, and grey out the ones
+                    // that have no rewind point behind them.
+                    final PlayerControllerHuman controller =
+                            (PlayerControllerHuman) matchUI.getGameController();
+                    final List<String> points = controller.describeRewindPoints();
+                    final Localizer loc = Localizer.getInstance();
+                    rewindMenu.setEnabled(!points.isEmpty());
+                    for (int i = 0; i < rewindMenu.getItemCount(); i++) {
+                        final JMenuItem item = rewindMenu.getItem(i);
+                        final String steps = i == 0
+                                ? loc.getMessage("lblRewindOneAction")
+                                : loc.getMessage("lblRewindManyActions", i + 1);
+                        if (i < points.size()) {
+                            item.setEnabled(true);
+                            item.setText(loc.getMessage("lblRewindPointAt", steps, points.get(i)));
+                        } else {
+                            item.setEnabled(false);
+                            item.setText(loc.getMessage("lblRewindPointAt", steps,
+                                    loc.getMessage("lblRewindNoPoints")));
+                        }
+                    }
+                }
             }
             @Override public void menuDeselected(final MenuEvent e) {}
             @Override public void menuCanceled(final MenuEvent e) {}
@@ -63,6 +100,54 @@ public final class GameMenu {
         final Localizer localizer = Localizer.getInstance();
         final SkinnedMenuItem menuItem = new SkinnedMenuItem(localizer.getMessage("lblResetSavedAbilityOrders"));
         menuItem.addActionListener(e -> matchUI.getGameController().sendYieldUpdate(new YieldUpdate.ClearAbilityOrders()));
+        return menuItem;
+    }
+
+    /**
+     * Undoes the player's last actions and everything that followed them, including the
+     * other players' and the AI's moves. Only offered to whoever runs the game (host or
+     * single player) — a network client has no game state to rewind.
+     *
+     * One entry per step, so going back further than one action is a single click rather
+     * than repeated rewinds, which is awkward once the AI has moved again in between.
+     */
+    private JMenu getMenu_Rewind() {
+        if (!(matchUI.getGameController() instanceof PlayerControllerHuman controller)) {
+            return null;
+        }
+        final int maxSteps = controller.getGame().REWIND_STEPS;
+        if (maxSteps < 1) {
+            return null;
+        }
+        final Localizer localizer = Localizer.getInstance();
+        final JMenu menu = new JMenu(localizer.getMessage("lblRewind"));
+        for (int step = 1; step <= maxSteps; step++) {
+            final int steps = step;
+            final SkinnedMenuItem item = new SkinnedMenuItem(steps == 1
+                    ? localizer.getMessage("lblRewindOneAction")
+                    : localizer.getMessage("lblRewindManyActions", steps));
+            item.addActionListener(e -> controller.requestRewind(steps));
+            menu.add(item);
+        }
+        return menu;
+    }
+
+    /** Writes the current position to a file, for picking it up again after a crash. */
+    private SkinnedMenuItem getMenuItem_SaveGame() {
+        if (!(matchUI.getGameController() instanceof PlayerControllerHuman controller)) {
+            return null;
+        }
+        final SkinnedMenuItem menuItem = new SkinnedMenuItem(Localizer.getInstance().getMessage("lblSaveGame"));
+        menuItem.addActionListener(e -> controller.saveGameToFile());
+        return menuItem;
+    }
+
+    private SkinnedMenuItem getMenuItem_LoadGame() {
+        if (!(matchUI.getGameController() instanceof PlayerControllerHuman controller)) {
+            return null;
+        }
+        final SkinnedMenuItem menuItem = new SkinnedMenuItem(Localizer.getInstance().getMessage("lblLoadGame"));
+        menuItem.addActionListener(e -> controller.loadGameFromFile());
         return menuItem;
     }
 

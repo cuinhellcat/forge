@@ -14,6 +14,7 @@ import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.PlayerZoneBattlefield;
+import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
 
 import java.util.Collections;
@@ -298,7 +299,12 @@ public class GameSnapshot {
 
         for(Card fromCard : fromGame.getCardsInGame()) {
             Card newCard = toGame.findById(fromCard.getId());
-            Player toPlayer = findBy(toGame, fromCard.getController());
+            // Zones belong to a player: the controller's battlefield, but the owner's
+            // graveyard, hand and library. Going by the controller alone files a card whose
+            // control has changed under the wrong player, so a stolen creature that died
+            // reappears in the thief's graveyard when the snapshot is used.
+            Player fromZonePlayer = fromCard.getZone().getPlayer();
+            Player toPlayer = findBy(toGame, fromZonePlayer != null ? fromZonePlayer : fromCard.getController());
             ZoneType fromType = fromCard.getZone().getZoneType();
             int zonePosition = 0;
             if (ZoneType.ORDERED_ZONES.contains(fromType)) {
@@ -308,16 +314,19 @@ public class GameSnapshot {
             }
 
             if (newCard == null) {
-                // Storing a game uses this path...
-                newCard = createCardCopy(toGame, toPlayer, fromCard);
+                // Storing a game uses this path... the copy keeps the original owner, which
+                // is not the same player as the one whose zone it currently sits in.
+                newCard = createCardCopy(toGame, findBy(toGame, fromCard.getOwner()), fromCard);
             } else {
-                ZoneType type = newCard.getZone().getZoneType();
-                if (type != fromType) {
-                    if (type.equals(ZoneType.Stack)) {
-                        toGame.getStackZone().remove(newCard);
-                    } else {
-                        toPlayer.getZone(type).remove(newCard);
-                    }
+                // Take it out of wherever it currently is, unless that is already the zone
+                // it is going into. Comparing zone types alone misses a move between two
+                // players' battlefields — a creature stolen after the snapshot was taken
+                // then ends up in both of them.
+                Zone currentZone = newCard.getZone();
+                Zone targetZone = fromType.equals(ZoneType.Stack)
+                        ? toGame.getStackZone() : toPlayer.getZone(fromType);
+                if (currentZone != null && currentZone != targetZone) {
+                    currentZone.remove(newCard);
                 }
             }
 
@@ -334,6 +343,19 @@ public class GameSnapshot {
             setCardInCopiedGame(toGame, ue.toPlayer, ue.fromCard, ue.newCard, ue.fromType, ue.zonePosition);
         }
 
+        // Cards the current game has but the snapshot does not: tokens, copies and effect
+        // cards that came into being after it was taken. There is no earlier state to put
+        // them back into, so they leave the game — and the loops below would otherwise look
+        // them up in the snapshot and find nothing.
+        for (Card extraCard : toGame.getCardsInGame()) {
+            if (fromGame.findById(extraCard.getId()) == null) {
+                Zone zone = extraCard.getZone();
+                if (zone != null) {
+                    zone.remove(extraCard);
+                }
+            }
+        }
+
         // This loop happens later to make sure all cards are in the correct zone first
         for (Card newCard : toGame.getCardsIn(ZoneType.Battlefield)) {
             Card fromCard = fromGame.findById(newCard.getId());
@@ -346,6 +368,10 @@ public class GameSnapshot {
                     newAttachedTo.addAttachedCard(newCard);
                 }
             }
+            // Melded or not, the front half has to point at what the snapshot had — the two
+            // halves are one permanent, and a stale link outlives the meld otherwise.
+            newCard.setMeldedWith(fromCard.getMeldedWith() == null ? null
+                    : toGame.findById(fromCard.getMeldedWith().getId()));
             if (fromCard.getCloneOrigin() != null) {
                 newCard.setCloneOrigin(toGame.findById(fromCard.getCloneOrigin().getId()));
             }
@@ -377,7 +403,20 @@ public class GameSnapshot {
         if (fromType.equals(ZoneType.Stack)) {
             toGame.getStackZone().add(newCard);
             newCard.setZone(toGame.getStackZone());
+        } else if (isMelded(fromCard)) {
+            // The back half of a meld lives in the battlefield zone but in its own
+            // collection rather than the card list. Putting it in the list instead would
+            // leave it on the battlefield as a permanent of its own.
+            PlayerZoneBattlefield battlefield = (PlayerZoneBattlefield) toPlayer.getZone(ZoneType.Battlefield);
+            if (newCard.getZone() == null) {
+                newCard.setZone(battlefield);
+            }
+            battlefield.addToMelded(newCard);
         } else {
+            // It may have been melded in the state we are leaving behind.
+            if (toPlayer.getZone(ZoneType.Battlefield) instanceof PlayerZoneBattlefield battlefield) {
+                battlefield.removeFromMelded(newCard);
+            }
             toPlayer.getZone(fromType).add(newCard);
             newCard.setZone(toPlayer.getZone(fromType));
         }
@@ -389,9 +428,23 @@ public class GameSnapshot {
         newCard.setFaceDown(fromCard.isFaceDown());
         newCard.setManifested(fromCard.getManifestedSA());
         newCard.setSickness(fromCard.hasSickness());
-        //newCard.setForetold(fromCard.isForetold());
-        //newCard.setForetoldCostByEffect(fromCard.isForetoldCostByEffect());
+        // Who controls a card is state of its own. A creature stolen after the snapshot was
+        // taken stays with the thief otherwise: its zone is corrected, but the card still
+        // names the thief as controller, so it keeps playing for them.
+        Player fromController = findBy(toGame, fromCard.getController());
+        if (fromController != null && fromController != newCard.getController()) {
+            newCard.setController(fromController, toGame.getNextTimestamp());
+        }
+        newCard.setForetold(fromCard.isForetold());
+        newCard.setForetoldCostByEffect(fromCard.isForetoldCostByEffect());
+        newCard.setBackSide(fromCard.isBackSide());
         newCard.setState(fromCard.getCurrentStateName(), false);
+    }
+
+    /** The back half of a meld: on the battlefield, but held apart from its card list. */
+    private static boolean isMelded(Card c) {
+        return c.getZone() instanceof PlayerZoneBattlefield battlefield
+                && battlefield.getMeldedCards().contains(c);
     }
 
     private static SpellAbility findSAInCard(SpellAbility sa, Card c) {
