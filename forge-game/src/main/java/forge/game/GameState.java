@@ -1334,12 +1334,12 @@ public class GameState {
                     c.setBackSide(true);
                 }
                 else if (info.startsWith("OnAdventure")) {
-                    String abAdventure = "DB$ Effect | RememberObjects$ Self | StaticAbilities$ Play | ForgetOnMoved$ Exile | Duration$ Permanent | ConditionDefined$ Self | ConditionPresent$ Card.!copiedSpell";
-                    SpellAbility saAdventure = AbilityFactory.getAbility(abAdventure, c);
-                    StringBuilder sbPlay = new StringBuilder();
-                    sbPlay.append("Mode$ Continuous | MayPlay$ True | EffectZone$ Command | Affected$ Card.IsRemembered+nonAdventure");
-                    sbPlay.append(" | AffectedZone$ Exile | Description$ You may cast the card.");
-                    saAdventure.setSVar("Play", sbPlay.toString());
+                    // Built from the same definition the game itself uses, on the card's
+                    // Adventure state. The copy that used to live here had drifted: no
+                    // Adventure$ True, so the reminder came back nameless and imageless,
+                    // and a stale Affected$ filter, so the card was no longer castable.
+                    SpellAbility saAdventure = CardFactoryUtil.makeAdventureEffect(
+                            c.getState(CardStateName.Secondary));
                     saAdventure.setActivatingPlayer(c.getOwner());
                     saAdventure.resolve();
                     c.setExiledWith(c); // This seems to be the way it's set up internally. Potentially not needed here?

@@ -375,6 +375,13 @@ public class Game {
             final GameState state = new GameState();
             try {
                 state.parse(point.stateText);
+                // Applying a state only adds the spells it recorded, it never clears what
+                // is there — so anything in flight when the rewind was asked for would
+                // survive it. A turn is starting over: nothing may be waiting to resolve.
+                stack.clearSimultaneousStack();
+                stack.clearFrozen();
+                stack.clearUndoStack();
+                stack.clear();
                 state.applyToGame(this);
             } catch (Exception e) {
                 Logger.error(e, "Rewind to turn {} failed", point.turn);

@@ -4062,6 +4062,22 @@ public class CardFactoryUtil {
 
         SpellAbility saExile = AbilityFactory.getAbility(abExile, card);
 
+        saExile.setSubAbility(makeAdventureEffect(card));
+
+        ReplacementEffect re = ReplacementHandler.parseReplacement(repeffstr, card.getCard(), true);
+
+        re.setOverridingAbility(saExile);
+        return re;
+    }
+
+    /**
+     * The effect that keeps a card on an Adventure castable while it sits in exile.
+     *
+     * Also needed when a game state is loaded, because the card comes back in exile with
+     * nothing to grant that permission. Shared so the two cannot drift apart — the copy in
+     * GameState had done exactly that.
+     */
+    public static AbilitySub makeAdventureEffect(CardState card) {
         String abEffect = "DB$ Effect | RememberObjects$ Self | StaticAbilities$ Play | ForgetOnMoved$ Exile | Duration$ Permanent | ConditionDefined$ Self | ConditionPresent$ Card.!copiedSpell+!token | Adventure$ True";
         AbilitySub saEffect = (AbilitySub)AbilityFactory.getAbility(abEffect, card);
 
@@ -4070,12 +4086,7 @@ public class CardFactoryUtil {
         sbPlay.append(" | AffectedZone$ Exile | Description$ You may cast EFFECTSOURCE.");
         saEffect.setSVar("Play", sbPlay.toString());
 
-        saExile.setSubAbility(saEffect);
-
-        ReplacementEffect re = ReplacementHandler.parseReplacement(repeffstr, card.getCard(), true);
-
-        re.setOverridingAbility(saExile);
-        return re;
+        return saEffect;
     }
 
     public static ReplacementEffect setupOmenAbility(CardState card) {
