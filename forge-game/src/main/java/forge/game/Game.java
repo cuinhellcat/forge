@@ -122,14 +122,21 @@ public class Game {
         private final List<String> stateText;
         /** Turn and priority bookkeeping that the save format itself does not carry. */
         private final PhaseHandler.PriorityState priorityState;
+        /**
+         * Emblems and the hidden helper cards behind lasting effects ("for the rest of the
+         * game", "you have no maximum hand size"). The save format can only name printed
+         * cards, so these would be dropped; the point holds on to the objects instead.
+         */
+        private final List<Pair<Card, Player>> commandEffects;
         /** Whose turn this point is the start of; only that player is offered it. */
         private final Player player;
         private final int turn;
 
-        private RewindPoint(List<String> stateText, PhaseHandler.PriorityState priorityState, Player player,
-                int turn) {
+        private RewindPoint(List<String> stateText, PhaseHandler.PriorityState priorityState,
+                List<Pair<Card, Player>> commandEffects, Player player, int turn) {
             this.stateText = stateText;
             this.priorityState = priorityState;
+            this.commandEffects = commandEffects;
             this.player = player;
             this.turn = turn;
         }
@@ -283,7 +290,7 @@ public class Game {
             return;
         }
         turnRewindPoints.addFirst(new RewindPoint(Arrays.asList(state.toString().split("\n")),
-                phaseHandler.capturePriorityState(), p, phaseHandler.getTurn()));
+                phaseHandler.capturePriorityState(), collectCommandEffects(), p, phaseHandler.getTurn()));
 
         // Trim per player, so a second human at the table cannot push someone else's
         // points out of the list before they have used up their own allowance.
@@ -293,6 +300,25 @@ public class Game {
                 it.remove();
             }
         }
+    }
+
+    /**
+     * The cards in the command zone that the save format cannot describe, because it can
+     * only write down printed cards and tokens. Emblems and the helper cards that carry
+     * lasting effects are neither, so applying a state silently drops them — see the
+     * paper card check in GameState#addCard. Keeping the objects themselves lets a rewind
+     * put back exactly the ones that existed at that moment.
+     */
+    private List<Pair<Card, Player>> collectCommandEffects() {
+        final List<Pair<Card, Player>> out = Lists.newArrayList();
+        for (final Player p : getPlayers()) {
+            for (final Card c : p.getZone(ZoneType.Command).getCards()) {
+                if (c.getPaperCard() == null && !c.isToken()) {
+                    out.add(Pair.of(c, p));
+                }
+            }
+        }
+        return out;
     }
 
     /**
@@ -355,6 +381,7 @@ public class Game {
                 return false;
             }
             phaseHandler.restorePriorityState(point.priorityState);
+            restoreCommandEffects(point);
             // Everything newer than the target is gone for good — you can't redo a rewind.
             while (turnRewindPoints.peekFirst() != point) {
                 turnRewindPoints.removeFirst();
@@ -364,6 +391,21 @@ public class Game {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Puts back the emblems and lasting-effect helper cards the state could not carry.
+     * Applying a state empties the command zone, so anything created after the point is
+     * already gone and only what belongs there is added back.
+     */
+    private void restoreCommandEffects(RewindPoint point) {
+        for (final Pair<Card, Player> entry : point.commandEffects) {
+            final Zone zone = entry.getRight().getZone(ZoneType.Command);
+            if (!zone.contains(entry.getLeft())) {
+                zone.add(entry.getLeft());
+            }
+        }
+        action.checkStateEffects(true);
     }
 
     public void copyLastState() {
