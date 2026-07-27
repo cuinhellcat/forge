@@ -183,7 +183,7 @@ Ohne den Namen passiert scheinbar nichts, und der Test schlägt ohne Fehlermeldu
   dem Spielfeld errechnet), beim Laden aus dem Hauptmenü steht in `LoadSavedGame` fest die 7.
 - **Melded Karten** werden beim Zurückholen eines `GameSnapshot` zusätzlich lose aufs
   Spielfeld gelegt. Betrifft nur den Abbruch eines Zaubers, nicht Rewind 2.0. Test liegt
-  bereit (`SnapshotMeldTest`), nie gemeldet.
+  bereit (`SnapshotMeldTest`), ans Original geschickt als PR #11421 (offen).
 
 ---
 
