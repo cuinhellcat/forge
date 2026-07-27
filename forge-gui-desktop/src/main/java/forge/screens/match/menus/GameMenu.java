@@ -67,8 +67,8 @@ public final class GameMenu {
             @Override public void menuSelected(final MenuEvent e) {
                 autoPassItem.setState(prefs.getPrefBoolean(FPref.YIELD_AUTO_PASS_NO_ACTIONS));
                 if (rewindMenu != null) {
-                    // Label every step with where it actually leads, and grey out the ones
-                    // that have no rewind point behind them.
+                    // Name every entry after the turn it leads back to, and show only the
+                    // ones that have a recorded point behind them.
                     final PlayerControllerHuman controller =
                             (PlayerControllerHuman) matchUI.getGameController();
                     final List<String> points = controller.describeRewindPoints();
@@ -76,16 +76,9 @@ public final class GameMenu {
                     rewindMenu.setEnabled(!points.isEmpty());
                     for (int i = 0; i < rewindMenu.getItemCount(); i++) {
                         final JMenuItem item = rewindMenu.getItem(i);
-                        final String steps = i == 0
-                                ? loc.getMessage("lblRewindOneAction")
-                                : loc.getMessage("lblRewindManyActions", i + 1);
+                        item.setVisible(i < points.size());
                         if (i < points.size()) {
-                            item.setEnabled(true);
-                            item.setText(loc.getMessage("lblRewindPointAt", steps, points.get(i)));
-                        } else {
-                            item.setEnabled(false);
-                            item.setText(loc.getMessage("lblRewindPointAt", steps,
-                                    loc.getMessage("lblRewindNoPoints")));
+                            item.setText(loc.getMessage("lblRewindToTurn", points.get(i)));
                         }
                     }
                 }
@@ -104,12 +97,13 @@ public final class GameMenu {
     }
 
     /**
-     * Undoes the player's last actions and everything that followed them, including the
-     * other players' and the AI's moves. Only offered to whoever runs the game (host or
-     * single player) — a network client has no game state to rewind.
+     * Restarts one of the player's own turns from its beginning, discarding everything
+     * that happened since — including the other players' and the AI's moves. Only offered
+     * to whoever runs the game (host or single player); a network client has no game state
+     * to rewind.
      *
-     * One entry per step, so going back further than one action is a single click rather
-     * than repeated rewinds, which is awkward once the AI has moved again in between.
+     * One entry per recorded turn, so going back further is a single click rather than
+     * repeated rewinds.
      */
     private JMenu getMenu_Rewind() {
         if (!(matchUI.getGameController() instanceof PlayerControllerHuman controller)) {
@@ -123,9 +117,8 @@ public final class GameMenu {
         final JMenu menu = new JMenu(localizer.getMessage("lblRewind"));
         for (int step = 1; step <= maxSteps; step++) {
             final int steps = step;
-            final SkinnedMenuItem item = new SkinnedMenuItem(steps == 1
-                    ? localizer.getMessage("lblRewindOneAction")
-                    : localizer.getMessage("lblRewindManyActions", steps));
+            // Text is filled in when the menu opens, once the turn numbers are known.
+            final SkinnedMenuItem item = new SkinnedMenuItem(localizer.getMessage("lblRewindNoPoints"));
             item.addActionListener(e -> controller.requestRewind(steps));
             menu.add(item);
         }

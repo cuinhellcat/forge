@@ -9,132 +9,174 @@ import org.testng.AssertJUnit;
 import org.testng.annotations.Test;
 
 /**
- * Tests for the multi step rewind (Game#rewindToActionOf), which lets the player running
- * the game take back their last few actions along with everything that happened after.
+ * Tests for the turn based rewind (Game#stashTurnRewindPoint, Game#rewindToActionOf),
+ * which restarts one of the player's own turns from its beginning and throws away
+ * everything that happened since.
  *
- * A rewind point is stashed every time a player is about to act, so the newest one is
- * always "right now" and is skipped when counting steps back.
+ * A point is recorded once per turn, in the turn player's first main phase with an empty
+ * stack, because that is the only moment the save format describes without gaps.
  */
 public class RewindTest extends AITest {
 
-    private Game gameWithRewind() {
-        Game game = initAndCreateGame();
-        game.EXPERIMENTAL_RESTORE_SNAPSHOT = true;
-        return game;
+    /** Puts the game at the start of the given player's turn, ready for a rewind point. */
+    private void startTurn(Game game, Player p, int turn) {
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p, turn);
+        game.getPhaseHandler().setPriority(p);
+    }
+
+    /**
+     * Restoring a state runs on the game thread, which in a real match is the thread the
+     * rewind is triggered from. Tests have no such thread, so borrow one — GameAction
+     * recognises it by its name.
+     */
+    private boolean rewind(final Game game, final Player p, final int steps) {
+        final boolean[] result = new boolean[1];
+        final Thread t = new Thread(() -> result[0] = game.rewindToActionOf(p, steps), "Game-test");
+        t.start();
+        try {
+            t.join();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        return result[0];
     }
 
     @Test
-    public void rewindTakesBackTheLastAction() {
-        Game game = gameWithRewind();
+    public void rewindRestartsTheCurrentTurn() {
+        Game game = initAndCreateGame();
         Player p = game.getPlayers().get(0);
-        game.getPhaseHandler().setPriority(p);
 
-        game.stashGameState();                  // before the action
+        startTurn(game, p, 3);
+        game.stashTurnRewindPoint(p);
+
         addCard("Mountain", p);
         p.setLife(15, null);
-        game.stashGameState();                  // "now"
 
         AssertJUnit.assertEquals(1, game.getAvailableRewindSteps(p));
-        AssertJUnit.assertTrue(game.rewindToActionOf(p, 1));
+        AssertJUnit.assertTrue(rewind(game, p, 1));
 
-        AssertJUnit.assertEquals(0, game.getPlayers().get(0).getCardsIn(ZoneType.Battlefield).size());
-        AssertJUnit.assertEquals(20, game.getPlayers().get(0).getLife());
+        Player after = game.getPlayers().get(0);
+        AssertJUnit.assertEquals(0, after.getCardsIn(ZoneType.Battlefield).size());
+        AssertJUnit.assertEquals(20, after.getLife());
     }
 
     @Test
-    public void rewindGoesBackSeveralOwnActions() {
-        Game game = gameWithRewind();
+    public void rewindGoesBackSeveralOwnTurns() {
+        Game game = initAndCreateGame();
         Player p = game.getPlayers().get(0);
-        game.getPhaseHandler().setPriority(p);
 
-        game.stashGameState();
+        startTurn(game, p, 1);
+        game.stashTurnRewindPoint(p);
         addCard("Mountain", p);
-        game.stashGameState();
+
+        startTurn(game, p, 3);
+        game.stashTurnRewindPoint(p);
         addCard("Forest", p);
-        game.stashGameState();
+
+        startTurn(game, p, 5);
+        game.stashTurnRewindPoint(p);
         addCard("Island", p);
-        game.stashGameState();                  // "now": three lands on the battlefield
 
         AssertJUnit.assertEquals(3, game.getAvailableRewindSteps(p));
 
-        // Two steps back: the Island and the Forest are gone, the Mountain stays.
-        AssertJUnit.assertTrue(game.rewindToActionOf(p, 2));
-        AssertJUnit.assertEquals(1, game.getPlayers().get(0).getCardsIn(ZoneType.Battlefield).size());
-        AssertJUnit.assertEquals(1, countCardsWithName(game, "Mountain"));
+        // Three steps back is the oldest point: none of the lands had been played yet.
+        AssertJUnit.assertTrue(rewind(game, p, 3));
+        AssertJUnit.assertEquals(1, game.getPhaseHandler().getTurn());
+        AssertJUnit.assertEquals(0, game.getPlayers().get(0).getCardsIn(ZoneType.Battlefield).size());
     }
 
     @Test
-    public void rewindSkipsOtherPlayersPoints() {
-        Game game = gameWithRewind();
+    public void rewindUndoesWhatHappenedInBetween() {
+        Game game = initAndCreateGame();
         Player me = game.getPlayers().get(0);
         Player other = game.getPlayers().get(1);
-        PhaseHandler ph = game.getPhaseHandler();
 
-        ph.setPriority(me);
-        game.stashGameState();                  // my point, before my action
+        startTurn(game, me, 3);
+        game.stashTurnRewindPoint(me);
         addCard("Mountain", me);
 
-        ph.setPriority(other);
-        game.stashGameState();                  // the opponent acts in between
+        // The opponent's turn follows and they get something onto the battlefield too.
+        startTurn(game, other, 4);
         addCard("Swamp", other);
 
-        ph.setPriority(me);
-        game.stashGameState();                  // "now"
+        startTurn(game, me, 5);
 
-        // One step back for me undoes my Mountain *and* the opponent's Swamp with it.
-        AssertJUnit.assertTrue(game.rewindToActionOf(me, 1));
+        // Back to the start of my turn 3: my Mountain and their Swamp are both gone.
+        AssertJUnit.assertTrue(rewind(game, me, 1));
         AssertJUnit.assertEquals(0, game.getPlayers().get(0).getCardsIn(ZoneType.Battlefield).size());
         AssertJUnit.assertEquals(0, game.getPlayers().get(1).getCardsIn(ZoneType.Battlefield).size());
     }
 
     @Test
-    public void rewindRestoresTurnAndPriority() {
-        Game game = gameWithRewind();
+    public void rewindRestoresTurnPhaseAndPriority() {
+        Game game = initAndCreateGame();
         Player me = game.getPlayers().get(0);
         Player other = game.getPlayers().get(1);
         PhaseHandler ph = game.getPhaseHandler();
 
-        ph.setPriority(me);
-        game.stashGameState();
-        int turnBefore = ph.getTurn();
+        startTurn(game, me, 7);
+        game.stashTurnRewindPoint(me);
 
-        // The game moves on: other player's turn, later phase.
-        ph.devModeSet(PhaseType.COMBAT_DECLARE_ATTACKERS, other, turnBefore + 1);
+        ph.devModeSet(PhaseType.COMBAT_DECLARE_ATTACKERS, other, 8);
         ph.setPriority(other);
-        game.stashGameState();
 
-        ph.setPriority(me);
-        game.stashGameState();                  // "now"
-
-        AssertJUnit.assertTrue(game.rewindToActionOf(me, 1));
-        AssertJUnit.assertEquals(turnBefore, ph.getTurn());
+        AssertJUnit.assertTrue(rewind(game, me, 1));
+        AssertJUnit.assertEquals(7, ph.getTurn());
         AssertJUnit.assertEquals(PhaseType.MAIN1, ph.getPhase());
         AssertJUnit.assertEquals(me, ph.getPriorityPlayer());
+        AssertJUnit.assertEquals(me, ph.getPlayerTurn());
     }
 
     @Test
-    public void rewindIsLimitedAndDisabledWithoutSnapshots() {
-        Game game = gameWithRewind();
+    public void onlyOnePointPerTurnAndOnlyAtTheRightMoment() {
+        Game game = initAndCreateGame();
         Player p = game.getPlayers().get(0);
-        game.getPhaseHandler().setPriority(p);
+        Player other = game.getPlayers().get(1);
 
-        for (int i = 0; i < 10; i++) {
-            game.stashGameState();
-            addCard("Mountain", p);
+        startTurn(game, p, 3);
+        game.stashTurnRewindPoint(p);
+        game.stashTurnRewindPoint(p);   // same turn again: ignored
+        AssertJUnit.assertEquals(1, game.getAvailableRewindSteps(p));
+
+        // Not the turn player.
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, other, 4);
+        game.stashTurnRewindPoint(p);
+        AssertJUnit.assertEquals(1, game.getAvailableRewindSteps(p));
+
+        // Own turn, but not the first main phase.
+        game.getPhaseHandler().devModeSet(PhaseType.UPKEEP, p, 5);
+        game.stashTurnRewindPoint(p);
+        AssertJUnit.assertEquals(1, game.getAvailableRewindSteps(p));
+    }
+
+    @Test
+    public void rewindIsLimitedToTheConfiguredDepth() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+
+        for (int turn = 1; turn <= 10; turn++) {
+            startTurn(game, p, turn);
+            game.stashTurnRewindPoint(p);
         }
-        game.stashGameState();
 
-        // Never more than the configured number of steps, and asking for more fails.
         AssertJUnit.assertEquals(game.REWIND_STEPS, game.getAvailableRewindSteps(p));
-        AssertJUnit.assertFalse(game.rewindToActionOf(p, game.REWIND_STEPS + 1));
+        AssertJUnit.assertFalse(rewind(game, p, game.REWIND_STEPS + 1));
 
-        // Nothing is stored at all while the feature is off.
-        Game plain = initAndCreateGame();
-        Player q = plain.getPlayers().get(0);
-        plain.getPhaseHandler().setPriority(q);
-        plain.stashGameState();
-        plain.stashGameState();
-        AssertJUnit.assertEquals(0, plain.getAvailableRewindSteps(q));
-        AssertJUnit.assertFalse(plain.rewindToActionOf(q, 1));
+        // The oldest points were dropped, so the deepest step is not turn 1 any more.
+        AssertJUnit.assertTrue(rewind(game, p, game.REWIND_STEPS));
+        AssertJUnit.assertEquals(11 - game.REWIND_STEPS, game.getPhaseHandler().getTurn());
+    }
+
+    @Test
+    public void rewindIsOffWhenTheDepthIsZero() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.REWIND_STEPS = 0;
+
+        startTurn(game, p, 3);
+        game.stashTurnRewindPoint(p);
+
+        AssertJUnit.assertEquals(0, game.getAvailableRewindSteps(p));
+        AssertJUnit.assertFalse(rewind(game, p, 1));
     }
 }

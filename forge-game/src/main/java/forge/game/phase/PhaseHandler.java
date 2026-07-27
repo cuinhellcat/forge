@@ -1059,6 +1059,12 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
                     return;
                 }
                 game.stashGameState();
+                // Record where this turn began, if this is that moment. Only for players
+                // who can actually ask for a rewind. Reading the game out does not change
+                // it, so the call is safe here; the timing conditions are checked inside.
+                if (!pPlayerPriority.getController().isAI()) {
+                    game.stashTurnRewindPoint(pPlayerPriority);
+                }
 
                 chosenSa = pPlayerPriority.getController().chooseSpellAbilityToPlay();
 

@@ -102,38 +102,40 @@ public class Game {
     // While this is false here, its really set by the Match/Preferences
 
     // If this merges with LKI In the future, it will need to change forms
-    // Rewind points, newest first. The head is what rollbackAbility() restores when a
-    // cast is cancelled; the older ones back the host-side rewind (see rewindToActionOf).
-    private final Deque<RewindPoint> previousGameStates = new ArrayDeque<>();
-    // A restore is always followed by the main loop stashing an equivalent state again;
-    // replacing the head then keeps one entry per action instead of piling up duplicates.
-    private boolean replaceHeadOnNextStash = false;
+    private GameSnapshot previousGameState = null;
 
-    /** How many own actions a player may rewind. Set by the Match from the preferences. */
+    /**
+     * Rewind points, newest first. One is taken at the start of each human player's own
+     * turn — see stashTurnRewindPoint for why that particular moment.
+     */
+    private final Deque<RewindPoint> turnRewindPoints = new ArrayDeque<>();
+
+    /** How many of their own turns a player may rewind. Set by the Match from the preferences. */
     public int REWIND_STEPS = 3;
-    /** Upper bound on stored rewind points; each one holds a full copy of the game. */
-    private static final int MAX_REWIND_POINTS = Math.max(1, Integer.getInteger("forge.undoBuffer", 16));
 
-    /** A snapshot plus the turn/priority bookkeeping that GameSnapshot itself does not cover. */
+    /**
+     * A rewind point is the game written out in Forge's own save format, the same one
+     * puzzles and saved games use. Stored as text rather than as a parsed GameState so it
+     * cannot hold on to live objects from the game it was taken in.
+     */
     private static final class RewindPoint {
-        private final GameSnapshot snapshot;
+        private final List<String> stateText;
+        /** Turn and priority bookkeeping that the save format itself does not carry. */
         private final PhaseHandler.PriorityState priorityState;
-        private final Player priorityPlayer;
-        /** Where this point sits, so the player can be told what they are going back to. */
+        /** Whose turn this point is the start of; only that player is offered it. */
+        private final Player player;
         private final int turn;
-        private final PhaseType phase;
 
-        private RewindPoint(GameSnapshot snapshot, PhaseHandler.PriorityState priorityState, Player priorityPlayer,
-                int turn, PhaseType phase) {
-            this.snapshot = snapshot;
+        private RewindPoint(List<String> stateText, PhaseHandler.PriorityState priorityState, Player player,
+                int turn) {
+            this.stateText = stateText;
             this.priorityState = priorityState;
-            this.priorityPlayer = priorityPlayer;
+            this.player = player;
             this.turn = turn;
-            this.phase = phase;
         }
 
         private String describe() {
-            return "turn " + turn + (phase == null ? "" : ", " + phase.nameForUi);
+            return String.valueOf(turn);
         }
     }
     private CardCollection lastStateBattlefield = new CardCollection();
@@ -233,36 +235,64 @@ public class Game {
     public void stashGameState() {
         // Take a snapshot of the current state to restore to previous state
         if (EXPERIMENTAL_RESTORE_SNAPSHOT) {
-            GameSnapshot snapshot = new GameSnapshot(this);
-            snapshot.makeCopy();
-
-            if (replaceHeadOnNextStash && !previousGameStates.isEmpty()) {
-                previousGameStates.removeFirst();
-            }
-            replaceHeadOnNextStash = false;
-
-            previousGameStates.addFirst(new RewindPoint(snapshot, phaseHandler.capturePriorityState(),
-                    phaseHandler.getPriorityPlayer(), phaseHandler.getTurn(), phaseHandler.getPhase()));
-            while (previousGameStates.size() > MAX_REWIND_POINTS) {
-                previousGameStates.removeLast();
-            }
+            previousGameState = new GameSnapshot(this);
+            previousGameState.makeCopy();
         }
     }
 
     public boolean restoreGameState() {
         // Restore game state snapshot
-        if (previousGameStates.isEmpty() || !EXPERIMENTAL_RESTORE_SNAPSHOT) {
+        if (previousGameState == null || !EXPERIMENTAL_RESTORE_SNAPSHOT) {
             return false;
         }
 
-        restore(previousGameStates.peekFirst());
+        previousGameState.restoreGameState(this);
         return true;
     }
 
-    private void restore(RewindPoint point) {
-        point.snapshot.restoreGameState(this);
-        phaseHandler.restorePriorityState(point.priorityState);
-        replaceHeadOnNextStash = true;
+    /**
+     * Remember where this turn started, if this is the right moment for it.
+     *
+     * The save format carries no "until end of turn" effects and no running combat, so a
+     * point taken mid-turn would always be missing something. The start of a player's own
+     * turn is the one moment where that does not matter: the previous turn's temporary
+     * effects have already worn off in its cleanup step, no combat is running, and by the
+     * first main phase the upkeep and draw triggers have finished resolving. Hence the
+     * conditions below — own turn, first main phase, empty stack, and only once per turn.
+     */
+    public void stashTurnRewindPoint(Player p) {
+        if (REWIND_STEPS < 1 || p == null) {
+            return;
+        }
+        if (p != phaseHandler.getPlayerTurn() || phaseHandler.getPhase() != PhaseType.MAIN1) {
+            return;
+        }
+        if (!stack.isEmpty() || stack.isFrozen()) {
+            return;
+        }
+        final RewindPoint newest = turnRewindPoints.peekFirst();
+        if (newest != null && newest.player == p && newest.turn == phaseHandler.getTurn()) {
+            return; // already have this turn, including right after rewinding back into it
+        }
+
+        final GameState state = new GameState();
+        try {
+            state.initFromGame(this);
+        } catch (Exception e) {
+            Logger.warn(e, "Could not record a rewind point for turn {}", phaseHandler.getTurn());
+            return;
+        }
+        turnRewindPoints.addFirst(new RewindPoint(Arrays.asList(state.toString().split("\n")),
+                phaseHandler.capturePriorityState(), p, phaseHandler.getTurn()));
+
+        // Trim per player, so a second human at the table cannot push someone else's
+        // points out of the list before they have used up their own allowance.
+        int mine = 0;
+        for (Iterator<RewindPoint> it = turnRewindPoints.iterator(); it.hasNext();) {
+            if (it.next().player == p && ++mine > REWIND_STEPS) {
+                it.remove();
+            }
+        }
     }
 
     /**
@@ -271,12 +301,9 @@ public class Game {
      */
     public List<String> describeRewindPoints(Player p) {
         List<String> out = Lists.newArrayList();
-        for (RewindPoint point : skipCurrentPoint()) {
-            if (point.priorityPlayer == p) {
+        for (RewindPoint point : turnRewindPoints) {
+            if (point.player == p) {
                 out.add(point.describe());
-                if (out.size() == REWIND_STEPS) {
-                    break;
-                }
             }
         }
         return out;
@@ -284,67 +311,56 @@ public class Game {
 
     /** Drops the rewind history, e.g. after loading a save — it belongs to another game. */
     public void clearRewindPoints() {
-        previousGameStates.clear();
-        replaceHeadOnNextStash = false;
+        turnRewindPoints.clear();
     }
 
     /**
-     * How many of this player's own actions can still be rewound. Never more than
-     * REWIND_STEPS, and less than that early in the game or after a long AI sequence
-     * has pushed the older rewind points out of the buffer.
+     * How many of this player's own turns can still be rewound to. Never more than
+     * REWIND_STEPS, and less than that in the opening turns of a game.
      */
     public int getAvailableRewindSteps(Player p) {
-        if (!EXPERIMENTAL_RESTORE_SNAPSHOT) {
-            return 0;
-        }
         int found = 0;
-        for (RewindPoint point : skipCurrentPoint()) {
-            if (point.priorityPlayer == p && ++found == REWIND_STEPS) {
-                break;
+        for (RewindPoint point : turnRewindPoints) {
+            if (point.player == p) {
+                found++;
             }
         }
         return found;
     }
 
     /**
-     * The rewind points without the head. A point is stashed every time a player is about
-     * to act, so the head is the moment the player is in right now — rewinding to it would
-     * do nothing.
-     */
-    private Iterable<RewindPoint> skipCurrentPoint() {
-        return () -> {
-            final Iterator<RewindPoint> it = previousGameStates.iterator();
-            if (it.hasNext()) {
-                it.next();
-            }
-            return it;
-        };
-    }
-
-    /**
-     * Rewind the whole game to just before this player's n-th most recent action,
-     * discarding everything that happened since — including other players' and the
-     * AI's moves, which get played out again from there.
+     * Rewind the whole game to the start of this player's n-th most recent own turn,
+     * discarding everything that happened since — including other players' and the AI's
+     * moves, which get played out again from there.
      *
-     * @param steps 1 = undo the last own action, 2 = the one before it, ...
+     * @param steps 1 = back to the start of the current or last own turn, 2 = the one before it, ...
      * @return true if a matching rewind point was found and restored
      */
     public boolean rewindToActionOf(Player p, int steps) {
-        if (!EXPERIMENTAL_RESTORE_SNAPSHOT || steps < 1 || steps > REWIND_STEPS) {
+        if (steps < 1 || steps > REWIND_STEPS) {
             return false;
         }
 
         int found = 0;
-        for (RewindPoint point : skipCurrentPoint()) { // newest first
-            if (point.priorityPlayer != p || ++found < steps) {
+        for (RewindPoint point : turnRewindPoints) { // newest first
+            if (point.player != p || ++found < steps) {
                 continue;
             }
-            // Everything newer than the target is gone for good — you can't redo a rewind.
-            while (previousGameStates.peekFirst() != point) {
-                previousGameStates.removeFirst();
+            final GameState state = new GameState();
+            try {
+                state.parse(point.stateText);
+                state.applyToGame(this);
+            } catch (Exception e) {
+                Logger.error(e, "Rewind to turn {} failed", point.turn);
+                return false;
             }
-            restore(point);
-            fireEvent(new GameEventAddLog(GameLogEntryType.INFORMATION, p + " rewound the game."));
+            phaseHandler.restorePriorityState(point.priorityState);
+            // Everything newer than the target is gone for good — you can't redo a rewind.
+            while (turnRewindPoints.peekFirst() != point) {
+                turnRewindPoints.removeFirst();
+            }
+            fireEvent(new GameEventAddLog(GameLogEntryType.INFORMATION,
+                    p + " rewound the game to turn " + point.turn + "."));
             return true;
         }
         return false;
