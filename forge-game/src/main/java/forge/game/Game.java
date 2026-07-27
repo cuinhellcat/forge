@@ -401,11 +401,24 @@ public class Game {
     private void restoreCommandEffects(RewindPoint point) {
         for (final Pair<Card, Player> entry : point.commandEffects) {
             final Zone zone = entry.getRight().getZone(ZoneType.Command);
-            if (!zone.contains(entry.getLeft())) {
-                zone.add(entry.getLeft());
+            if (zone.contains(entry.getLeft()) || hasEffectNamed(zone, entry.getLeft().getName())) {
+                // Applying the state rebuilds a few of these itself — the commander and
+                // adventure effects among them — and that rebuilt one is the better copy,
+                // because it points at the cards the state just created.
+                continue;
             }
+            zone.add(entry.getLeft());
         }
         action.checkStateEffects(true);
+    }
+
+    private static boolean hasEffectNamed(Zone zone, String name) {
+        for (final Card c : zone.getCards()) {
+            if (c.getPaperCard() == null && c.getName().equals(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void copyLastState() {
