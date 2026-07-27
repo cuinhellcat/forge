@@ -196,3 +196,21 @@ Ohne den Namen passiert scheinbar nichts, und der Test schlägt ohne Fehlermeldu
 - **Nicht Feld für Feld nachtragen.** Wenn ein Wert nach dem Rücksprung fehlt, ist die erste
   Frage, ob er sich nicht ohnehin neu berechnen lässt (wie die Handkartenzahl aus dem
   Spielfeld). Erst wenn das nicht geht, wird etwas mitgespeichert.
+
+- **Alles, was beim Laden entstehen soll, entsteht am Ende.** Der Lader räumt erst jede Zone
+  leer, baut dann die Karten und **füllt die Zonen erst danach**. Was während des
+  Kartenbauens irgendwo abgelegt wird, wischt das Füllen wieder weg.
+
+  Forge ist da schon dreimal hineingelaufen: Kommandeur-Effekt (dort steht der verräterische
+  Kommentar *„would have been erased by setCards"*), Geschwindigkeits-Effekt, und die
+  Abenteuer-Erlaubnis — letztere war unser Fehler vom 27.07.
+
+  Deshalb läuft auch unser `restoreCommandEffects` **nach** `applyToGame`, nicht davor.
+  Faustregel: Wer nach dem Laden etwas in einer Zone haben will, legt es dorthin, wo schon
+  `handleCardAttachments` und `handleAdventures` stehen — hinter der Zonen-Schleife.
+
+- **Kopierte Spiellogik läuft auseinander.** Der Lader hatte eine eigene, veraltete Fassung
+  der Adventure-Definition: ein fehlendes `Adventure$ True` und ein alter Filter, und schon
+  war die Karte nach dem Laden nicht mehr spielbar. Wenn der Lader etwas nachbauen muss, das
+  das Spiel auch baut, dann aus **einer gemeinsamen Stelle** (hier
+  `CardFactoryUtil.makeAdventureEffect`) — sonst merkt die Kopie eine Regeländerung nie.
