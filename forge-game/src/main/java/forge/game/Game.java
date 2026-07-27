@@ -408,13 +408,16 @@ public class Game {
     private void restoreCommandEffects(RewindPoint point) {
         for (final Pair<Card, Player> entry : point.commandEffects) {
             final Zone zone = entry.getRight().getZone(ZoneType.Command);
-            if (zone.contains(entry.getLeft()) || hasEffectNamed(zone, entry.getLeft().getName())) {
-                // Applying the state rebuilds a few of these itself — the commander and
-                // adventure effects among them — and that rebuilt one is the better copy,
-                // because it points at the cards the state just created.
+            final Card effect = entry.getLeft();
+            // Applying the state rebuilds a few of these itself — the commander, speed and
+            // adventure effects among them — and the rebuilt one is the better copy,
+            // because it points at the cards the state just created. An Adventure reminder
+            // is named after the adventure half, so it will not match by name.
+            if (zone.contains(effect) || hasEffectNamed(zone, effect.getName())
+                    || effect.getName().endsWith("'s Adventure")) {
                 continue;
             }
-            zone.add(entry.getLeft());
+            zone.add(effect);
         }
         action.checkStateEffects(true);
     }

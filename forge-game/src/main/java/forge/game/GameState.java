@@ -70,6 +70,12 @@ public class GameState {
 
     private final Map<Integer, Card> idToCard = new HashMap<>();
     private final Map<Card, Integer> cardToAttachId = new HashMap<>();
+    /**
+     * Cards on an Adventure. Their permission effect goes into the command zone, which is
+     * set up after exile, so creating it while reading the exile zone would only see it
+     * wiped again — it has to wait until every zone is in place.
+     */
+    private final List<Card> cardsOnAdventure = new ArrayList<>();
     private final Map<Card, Player> cardToEnchantPlayerId = new HashMap<>();
     private final Map<Card, Integer> markedDamage = new HashMap<>();
     private final Map<Card, List<String>> cardToChosenClrs = new HashMap<>();
@@ -588,6 +594,7 @@ public class GameState {
         }
 
         idToCard.clear();
+        cardsOnAdventure.clear();
         cardToAttachId.clear();
         cardToEnchantPlayerId.clear();
         cardToRememberedId.clear();
@@ -617,6 +624,7 @@ public class GameState {
         for (int i = 0; i < playerStates.size(); i++) {
             setupPlayerState(game.getPlayers().get(i), playerStates.get(i));
         }
+        handleAdventures();
         handleCardAttachments();
         handleChosenEntities();
         handleRememberedEntities();
@@ -1054,6 +1062,18 @@ public class GameState {
         }
     }
 
+    /**
+     * Gives back the permission that keeps a card on an Adventure castable while it waits
+     * in exile, built from the same definition the game itself uses.
+     */
+    private void handleAdventures() {
+        for (final Card c : cardsOnAdventure) {
+            final SpellAbility sa = CardFactoryUtil.makeAdventureEffect(c.getState(CardStateName.Secondary));
+            sa.setActivatingPlayer(c.getOwner());
+            sa.resolve();
+        }
+    }
+
     private void handleCardAttachments() {
         // Unattach all permanents first
         for (Entry<Card, Integer> entry : cardToAttachId.entrySet()) {
@@ -1334,14 +1354,7 @@ public class GameState {
                     c.setBackSide(true);
                 }
                 else if (info.startsWith("OnAdventure")) {
-                    // Built from the same definition the game itself uses, on the card's
-                    // Adventure state. The copy that used to live here had drifted: no
-                    // Adventure$ True, so the reminder came back nameless and imageless,
-                    // and a stale Affected$ filter, so the card was no longer castable.
-                    SpellAbility saAdventure = CardFactoryUtil.makeAdventureEffect(
-                            c.getState(CardStateName.Secondary));
-                    saAdventure.setActivatingPlayer(c.getOwner());
-                    saAdventure.resolve();
+                    cardsOnAdventure.add(c);
                     c.setExiledWith(c); // This seems to be the way it's set up internally. Potentially not needed here?
                     c.setExiledBy(c.getController());
                 } else if (info.startsWith("IsCommander")) {
