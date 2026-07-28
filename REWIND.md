@@ -31,7 +31,7 @@ M=~/Programme/apache-maven-3.9.11/bin/mvn
 # bauen
 $M -o -B -DskipTests install
 
-# testen (299 Tests, dauert ~35 s)
+# testen (302 Tests, dauert ~35 s)
 $M -o -B -pl forge-gui-desktop test
 
 # installieren
@@ -61,6 +61,15 @@ Netzwerkprotokoll ist unverändert; nach dem Rücksprung bekommen alle Clients e
 vollständigen Zustandsabgleich statt der üblichen Differenz.
 
 **Speichern/Laden** — im Spiel-Menü und im Hauptmenü („Load saved game…").
+
+**Automatische Sicherung (seit v2.1)** — jeder Speicherpunkt geht zusätzlich auf die
+Platte, nach `…/Forge/games/autosave/`, Dateiname `autosave_<Datum>_<Zeit>_turn<N>.txt`.
+Es bleiben immer die **neuesten zwölf**, ältere werden gelöscht. Zu laden über
+*Forge → Load saved game…*.
+
+Der Grund dafür steht in Abschnitt 8 unter „Wenn Forge verschwindet": Ohne diese Dateien ist
+eine Partie, deren Fenster stirbt, nur noch über einen Eingriff in den laufenden Prozess
+erreichbar. Es gibt bewusst **keine** Nachfrage beim Programmstart.
 
 ---
 
@@ -108,6 +117,7 @@ Version gibt es hier selten echte Konflikte.
 | `forge-gui-desktop/…/menus/ForgeMenu.java`, `LoadSavedGame.java` | Spielstand aus dem Hauptmenü starten. |
 | Einstellungen (`ForgePreferences`, `VSubmenuPreferences`, `CSubmenuPreferences`, `HostedMatch`) | Die Tiefe als Einstellung. |
 | `forge-gui/…/net/server/FServerManager.java` | `resyncAllClients()` nach dem Rücksprung. |
+| `forge-gui/…/gamemodes/match/RewindAutosave.java` | **Neu (v2.1).** Schreibt jeden Speicherpunkt zusätzlich nach `games/autosave/` und behält die neuesten zwölf. Angehängt über `Game.setRewindAutosave(...)`, gesetzt in `HostedMatch`. Ein fehlgeschlagener Schreibversuch landet nur im Protokoll und kostet nie den Speicherpunkt im Arbeitsspeicher. |
 | `forge-gui/res/languages/en-US.properties` | Die Texte. |
 
 ### Gruppe B — Fehler in Forge selbst
@@ -126,6 +136,10 @@ ob die Stelle schon repariert ist.
 | `GameState.java` | **Spiel laden verlor das Abenteuer einer Karte:** Die Spielerlaubnis entstand beim Einlesen der Exil-Zone und wurde gleich danach beim Aufbau der Command-Zone wieder gelöscht. Jetzt erst am Ende gebaut (`handleAdventures`). | nein |
 | `CardFactoryUtil.java` | Der Lader hatte eine **eigene, veraltete Kopie** der Adventure-Definition. Jetzt eine gemeinsame Stelle (`makeAdventureEffect`). | nein |
 | `Game.java` (Rewind) | Zustand laden leerte den Stapel nie — was beim Rewind draufliegt, überlebte. Wird jetzt vorher geräumt. Der eigentliche Fehler steckt in `GameState.applyToGame`, wir umgehen ihn nur. | nein |
+| `DragCell.java` | **Reiter verschieben stürzte ab:** `setSelected` lief durch die Reiterliste und rief dabei Code, der Reiter hinzufügt oder entfernt. Jetzt über eine Kopie. | nein |
+| `CAllDecks.java` | **Der teuerste Fehler des Projekts.** `updateDeckManager` nahm an, ein Editor habe immer schon eine Deckverwaltung — beim Bildschirmwechsel hat er die noch nicht. Ein Klick auf einen Reiter oben in der Leiste warf einen Nullzeiger, brach den Layout-Aufbau ab, und das Fenster blieb leer über einer laufenden Partie. Danach ließ sich kein Layout mehr aufbauen. | nein |
+| `DragCell.java` | `setSelected` bricht nicht mehr den ganzen Layout-Aufbau ab, wenn **eine** Anzeigefläche beim Füllen stolpert. Sie bleibt leer, der Rest wird fertig, der Fehler landet im Protokoll. Das ist die eigentliche Lehre aus dem CAllDecks-Fall: nicht der Nullzeiger war schlimm, sondern dass er alles mitriss. | nein |
+| `DragCell.java` | `addDoc` trug einen Reiter doppelt ein, wenn er schon in der Zelle hing (der Deck-Editor macht das beim Verlassen). Danach war die Reiterleiste kürzer als die Liste und Forge ließ sich **nicht mehr schließen**. Wird jetzt übersprungen; die Einfügestelle ist zusätzlich begrenzt. Erst sichtbar geworden, nachdem der CAllDecks-Fehler weg war — vorher lief der Code nie. | nein |
 
 ---
 
@@ -185,6 +199,25 @@ Ohne den Namen passiert scheinbar nichts, und der Test schlägt ohne Fehlermeldu
   Spielfeld gelegt. Betrifft nur den Abbruch eines Zaubers, nicht Rewind 2.0. Test liegt
   bereit (`SnapshotMeldTest`), ans Original geschickt als PR #11421 (offen).
 
+### Wenn Forge verschwindet
+
+Am 28.07. war eine laufende Quest-Partie plötzlich ohne Fenster. Es sah nach Totalabsturz
+aus, war aber nur „Licht aus": Das Hauptfenster steht auf `DISPOSE_ON_CLOSE`, und weil der
+Spielfaden kein Hintergrundfaden ist, lief das Programm ohne Fenster weiter. Java beendet
+seinen Zeichen-Faden, sobald kein Fenster mehr da ist — deshalb war auch nichts mehr
+anzuklicken.
+
+**Erste Regel: `pgrep -fa forge-gui-desktop` prüfen, bevor irgendetwas neu gestartet wird.**
+Lebt der Prozess, lebt die Partie.
+
+Das Werkzeug dafür liegt in `~/Programme/forge-rettung/` (`LIESMICH.md` dort erklärt es):
+drei Java-Sonden, die sich an den laufenden Prozess hängen — Fenster wieder sichtbar machen,
+zurück auf den Match-Bildschirm schalten, und die Partie als Spielstand herausschreiben.
+Letztere hangelt sich über den Objektgraphen zum lebenden `forge.game.Game`.
+
+Seit der automatischen Sicherung (v2.1) sollte das nur noch der Notnagel sein: Der Anfang
+deines letzten Zuges liegt ohnehin als Datei bereit.
+
 ---
 
 ## 9. Grundsätze, die sich bewährt haben
@@ -208,6 +241,18 @@ Ohne den Namen passiert scheinbar nichts, und der Test schlägt ohne Fehlermeldu
   Deshalb läuft auch unser `restoreCommandEffects` **nach** `applyToGame`, nicht davor.
   Faustregel: Wer nach dem Laden etwas in einer Zone haben will, legt es dorthin, wo schon
   `handleCardAttachments` und `handleAdventures` stehen — hinter der Zonen-Schleife.
+
+- **Ein kaputtes Teil darf nur sich selbst kosten.** Der teuerste Fehler des Projekts war
+  kein besonders tiefer: ein Nullzeiger in einer Deckliste. Schlimm war, dass er den ganzen
+  Layout-Aufbau abbrach — danach war das Fenster leer, kein Reiter mehr erreichbar, und eine
+  laufende Partie nur noch mit einem Eingriff in den Prozess zu retten. Seitdem gilt an
+  solchen Sammelstellen: einzelne Teile in `try/catch`, Fehler ins Protokoll, weitermachen.
+  Der Nullzeiger ist trotzdem repariert — beides, nicht nur eines.
+
+- **Reparieren legt frei.** Kaum war der Nullzeiger weg, kam der nächste Fehler an einer
+  Stelle zum Vorschein, die vorher nie erreicht wurde (doppelt eingehängte Reiter, Forge
+  ließ sich nicht mehr schließen). Nach so einer Reparatur also nicht davon ausgehen, dass
+  es das war — der Weg dahinter ist ungetestetes Gelände.
 
 - **Kopierte Spiellogik läuft auseinander.** Der Lader hatte eine eigene, veraltete Fassung
   der Adventure-Definition: ein fehlendes `Adventure$ True` und ein alter Filter, und schon
