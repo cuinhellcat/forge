@@ -60,11 +60,16 @@ public enum CAllDecks implements ICDoc {
             // This may be default and so requiring potential update!
             ACEditorBase<? extends InventoryItem, ? extends DeckBase> editorCtrl =
                     CDeckEditorUI.SINGLETON_INSTANCE.getCurrentEditorController();
-            if (editorCtrl != null) {
+            // An editor exists well before its deck controller is wired up, and switching
+            // screens runs this in between. Asking it for a deck name then threw, which
+            // aborted the entire layout load and left the window with nothing in it.
+            if (editorCtrl != null && editorCtrl.getDeckController() != null) {
                 String currentDeckName = editorCtrl.getDeckController().getModelName();
                 if (currentDeckName != null && currentDeckName.length() > 0) {
                     DeckProxy deckProxy = dm.stringToItem(currentDeckName);
-                    if (deckProxy != null && !dm.getSelectedItem().equals(deckProxy))
+                    // deckProxy on the left: having nothing selected is a normal state,
+                    // and getSelectedItem() is null then.
+                    if (deckProxy != null && !deckProxy.equals(dm.getSelectedItem()))
                         dm.setSelectedItem(deckProxy);
                 }
             }

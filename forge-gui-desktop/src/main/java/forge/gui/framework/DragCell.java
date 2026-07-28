@@ -13,6 +13,8 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingConstants;
 
+import org.tinylog.Logger;
+
 import com.google.common.collect.Lists;
 
 import forge.localinstance.properties.ForgePreferences;
@@ -320,8 +322,16 @@ public final class DragCell extends JPanel implements ILocalRepaint {
                 docSelected = doc0;
                 doc.getTabLabel().priorityOne();
                 doc.getTabLabel().setSelected(true);
-                doc.populate();
-                doc.getLayoutControl().update();
+                // A panel that fails to fill itself must not take the screen down with it.
+                // This runs inside loadLayout, so an exception here used to abort the whole
+                // layout and leave an empty window over a still-running game.
+                try {
+                    doc.populate();
+                    doc.getLayoutControl().update();
+                } catch (final Exception ex) {
+                    Logger.error(ex, "Tab {} failed to populate; leaving it blank and carrying on",
+                            doc.getDocumentID());
+                }
             }
             else {
                 doc.getTabLabel().setSelected(false);

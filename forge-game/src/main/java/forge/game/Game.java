@@ -55,6 +55,7 @@ import org.tinylog.Logger;
 import org.tinylog.TaggedLogger;
 
 import java.util.*;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
 /**
@@ -112,6 +113,18 @@ public class Game {
 
     /** How many of their own turns a player may rewind. Set by the Match from the preferences. */
     public int REWIND_STEPS = 3;
+
+    /**
+     * Called with (turn, state text) whenever a rewind point is taken, so the position can
+     * also be put on disk. Set from the GUI side, which is what knows about folders; null
+     * in tests and on servers. A rewind point already exists in memory at that moment, so
+     * this costs nothing beyond the write itself.
+     */
+    private BiConsumer<Integer, List<String>> rewindAutosave = null;
+
+    public void setRewindAutosave(final BiConsumer<Integer, List<String>> hook) {
+        rewindAutosave = hook;
+    }
 
     /**
      * A rewind point is the game written out in Forge's own save format, the same one
@@ -289,8 +302,18 @@ public class Game {
             Logger.warn(e, "Could not record a rewind point for turn {}", phaseHandler.getTurn());
             return;
         }
-        turnRewindPoints.addFirst(new RewindPoint(Arrays.asList(state.toString().split("\n")),
+        final List<String> stateText = Arrays.asList(state.toString().split("\n"));
+        turnRewindPoints.addFirst(new RewindPoint(stateText,
                 phaseHandler.capturePriorityState(), collectCommandEffects(), p, phaseHandler.getTurn()));
+
+        if (rewindAutosave != null) {
+            try {
+                rewindAutosave.accept(phaseHandler.getTurn(), stateText);
+            } catch (Exception e) {
+                // A full disk must never cost anyone their turn.
+                Logger.warn(e, "Could not autosave turn {}", phaseHandler.getTurn());
+            }
+        }
 
         // Trim per player, so a second human at the table cannot push someone else's
         // points out of the list before they have used up their own allowance.
