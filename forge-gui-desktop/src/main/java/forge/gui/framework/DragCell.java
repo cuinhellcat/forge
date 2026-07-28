@@ -312,7 +312,10 @@ public final class DragCell extends JPanel implements ILocalRepaint {
         pnlBody.removeAll();
 
         // Priorities are used to "remember" tab selection history.
-        for (final IVDoc<? extends ICDoc> doc : allDocs) {
+        // Iterate a copy: populate() and update() can reach code that adds or removes
+        // docs from this very cell (zone tabs docking themselves in, dev mode coming
+        // and going, a match registering its views), which would blow up the iterator.
+        for (final IVDoc<? extends ICDoc> doc : Lists.newArrayList(allDocs)) {
             if (doc.equals(doc0)) {
                 docSelected = doc0;
                 doc.getTabLabel().priorityOne();
@@ -389,7 +392,7 @@ public final class DragCell extends JPanel implements ILocalRepaint {
         DragTab temp;
         int lowest = Integer.MAX_VALUE;
 
-        for (final IVDoc<? extends ICDoc> d : allDocs) {
+        for (final IVDoc<? extends ICDoc> d : Lists.newArrayList(allDocs)) {
             temp = d.getTabLabel();
 
             // This line prevents two tabs from having the same priority.
