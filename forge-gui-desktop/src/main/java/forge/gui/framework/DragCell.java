@@ -269,9 +269,24 @@ public final class DragCell extends JPanel implements ILocalRepaint {
      * @param doc0 &emsp; {@link forge.gui.framework.IVDoc} */
     public void addDoc(final IVDoc<? extends ICDoc> doc0) {
         if (doc0 instanceof VEmptyDoc) { return; }
+        if (allDocs.contains(doc0)) {
+            // Already here. Adding it again would list it twice while Swing merely moves
+            // the one tab label it has, leaving the list longer than the head bar — and the
+            // next add then aims past the end of it. The deck editor does exactly this when
+            // it puts its tabs back on the way out.
+            setSelected(getSelected());
+            return;
+        }
         allDocs.add(doc0);
         doc0.setParentCell(this);
-        pnlHead.add(doc0.getTabLabel(), "h 100%!, gap " + tabPaddingPx + "px " + tabPaddingPx + "px 0 0", allDocs.size() - 1);
+        // Meant to append. Clamped, so a head bar that drifted out of step with the list
+        // cannot turn into an illegal position and take the whole action down with it.
+        final int position = Math.min(allDocs.size() - 1, pnlHead.getComponentCount());
+        if (position != allDocs.size() - 1) {
+            Logger.warn("Tab bar holds {} labels for {} docs; appending {} at {}",
+                    pnlHead.getComponentCount(), allDocs.size(), doc0.getDocumentID(), position);
+        }
+        pnlHead.add(doc0.getTabLabel(), "h 100%!, gap " + tabPaddingPx + "px " + tabPaddingPx + "px 0 0", position);
 
         // Ensure that a tab is selected
         setSelected(getSelected());
